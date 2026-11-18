@@ -1,0 +1,16 @@
+# Signing keys — never commit private keys
+*.keystore
+*.jks
+*.idsig
+
+# Build intermediates
+out/
+*.apk.idsig
+__pycache__/
+*.pyc
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
