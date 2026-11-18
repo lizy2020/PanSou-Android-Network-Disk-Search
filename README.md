@@ -4,7 +4,7 @@
 >
 > English documentation: [README_EN.md](README_EN.md)
 
-把 [PanSou](https://github.com/fish2018/pansou) 网盘资源搜索服务打包成一个**自带后端的 Android App**：手机上不依赖任何外部服务器，安装即用。飞行模式下除 TG 频道外全部可用。
+把 [PanSou](https://github.com/fish2018/pansou) 网盘资源搜索服务打包成一个**自带后端的 Android App**：手机上不依赖任何外部服务器，安装即用。非代理模式下除 TG 频道外全部可用。
 
 这是上游项目的 **fork**，上游的 Go 后端源码、插件、配置与 Web 前端均随本仓库附带，签名私钥除外（原因见 [NOTICE.md](NOTICE.md)）。
 
