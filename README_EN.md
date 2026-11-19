@@ -28,6 +28,7 @@ The prebuilt APK is at [`releases/pansou-android-v2.0.apk`](releases/pansou-andr
 
 - **v2.0** (versionCode 10)
   - Link detection is on by default and still checks only currently visible results; existing users who turned it off keep their choice.
+  - The update notice now hides automatically once a search starts, so it never covers the results.
 - **v1.9**
   - Settings page: TG channels, search plugins, cloud-drive types and detection options all save on selection — the bottom save button is no longer needed.
 - **v1.8**

@@ -180,6 +180,9 @@
   var updateInfo = null;
   var syncing = false;
   var TIP_ID = 'pansou-update-tip';
+  // 用户一旦发起搜索就把红字撤掉，且不再出现——搜索结果页要清爽，
+  // 不能被「有更新」占着顶部。这是个单向开关，本会话内不恢复。
+  var updateDismissed = false;
 
   function makeTip() {
     var a = document.createElement('a');
@@ -194,8 +197,61 @@
     return a;
   }
 
+  function removeTip() {
+    try {
+      var tip = document.getElementById(TIP_ID);
+      if (tip && tip.parentNode) {
+        tip.parentNode.removeChild(tip);
+        log('更新提示已移除（开始搜索）');
+      }
+    } catch (e) {}
+  }
+
+  /** 用户点了搜索按钮或在输入框回车——撤掉红字，本会话不再显示 */
+  function dismissUpdateOnSearch(trigger) {
+    if (updateDismissed) return;
+    updateDismissed = true;
+    removeTip();
+    log('更新提示已关闭（' + trigger + '）');
+  }
+
+  // 事件委托挂 document：Vue 反复重建 DOM，直接绑元素会失效。
+  // 主搜索页的搜索触发有两个入口：输入框回车、输入框右侧的纸飞机按钮。
+  // 纸飞机按钮没有语义 class，但它是搜索 input 的紧邻兄弟（button），
+  // 所以用「点到的 button 的前一个兄弟是搜索框」来识别，比猜 class 稳。
+  function isSearchInput(el) {
+    if (!el || String(el.tagName || '').toUpperCase() !== 'INPUT') return false;
+    var ph = String(el.getAttribute('placeholder') || '');
+    return ph.indexOf('搜索资源') >= 0 || ph.indexOf('关键词') >= 0;
+  }
+
+  document.addEventListener('click', function (e) {
+    if (updateDismissed || !e.target) return;
+    var el = e.target;
+    // 沿 DOM 向上找，命中 button 时看它是不是搜索框的兄弟（纸飞机）
+    while (el && el !== document) {
+      if (String(el.tagName || '').toUpperCase() === 'BUTTON') {
+        var prev = el.previousElementSibling;
+        if (isSearchInput(prev) || isSearchInput(el.nextElementSibling)) {
+          dismissUpdateOnSearch('点击搜索');
+          return;
+        }
+      }
+      el = el.parentNode;
+    }
+  }, true);
+
+  document.addEventListener('keydown', function (e) {
+    if (updateDismissed || !e.target) return;
+    if (e.key !== 'Enter' && e.keyCode !== 13) return;
+    var t = e.target;
+    var tag = String(t.tagName || '').toUpperCase();
+    var editable = tag === 'INPUT' || tag === 'TEXTAREA' || t.isContentEditable;
+    if (editable) dismissUpdateOnSearch('回车搜索');
+  }, true);
+
   function syncUpdate() {
-    if (!updateInfo || syncing) return;
+    if (!updateInfo || syncing || updateDismissed) return;
     syncing = true;
     try {
       var page = document.querySelector('.search-page');
@@ -227,6 +283,8 @@
     show: function (tag, url) {
       updateInfo = { tag: tag, url: url };
       log('PansouUpdate.show ' + tag);
+      // 用户可能在我们查完版本之前就已经搜起来了——这时别再打扰他
+      if (updateDismissed) { log('已开始搜索，跳过更新提示'); return; }
       syncUpdate();
     }
   };
