@@ -14,22 +14,31 @@ This is a **fork** of the upstream project. The upstream Go backend source, plug
 
 - **Fully self-contained**: frontend, Go backend and forwarding proxy all run on the device; no server deployment needed.
 - **Multi-source concurrent search**: ~33 plugins / 22 channels built in, with smart result ranking and cloud-drive categorization.
-- **Link availability check**: a green dot beside a result indicates a check in progress.
+- **Link availability check**: on by default, checks only the results currently visible on screen (a green dot indicates a check in progress), reducing CPU load and anti-bot risk.
 - **Deep links to drive apps**: tapping a link opens the matching cloud-drive client (Quark, UC, etc.); falls back to the browser if not installed.
-- **Persistent local settings**: settings and the detection toggle are saved immediately and survive restarts.
+- **Persistent local settings**: channels, plugins, cloud-drive types and the detection toggle save on selection — no need to scroll to the bottom — and survive restarts.
 
 ## Current version
 
-**v1.7** (versionCode 7) · package `com.maomao.pansou` · arm64 only · minSdk 21 / targetSdk 35
+**v2.0** (versionCode 10) · package `com.maomao.pansou` · arm64 only · minSdk 21 / targetSdk 35
 
-The prebuilt APK is at [`releases/pansou-android-v1.7.apk`](releases/pansou-android-v1.7.apk), also available on the GitHub Releases page.
+The prebuilt APK is at [`releases/pansou-android-v2.0.apk`](releases/pansou-android-v2.0.apk), also available on the GitHub Releases page.
+
+## Changelog
+
+- **v2.0** (versionCode 10)
+  - Link detection is on by default and still checks only currently visible results; existing users who turned it off keep their choice.
+- **v1.9**
+  - Settings page: TG channels, search plugins, cloud-drive types and detection options all save on selection — the bottom save button is no longer needed.
+- **v1.8**
+  - Update hint: checks GitHub Releases in the background on startup and shows a red notice on the search page when a newer version exists, linking to the download page; fails silently.
 
 ## Quick start
 
 1. Download and install the APK (Android 8.0+, arm64; allow "install from unknown sources").
 2. On first launch, wait about 15 seconds for the bundled backend to initialize.
 3. Type a keyword and tap the **paper-plane icon** at the right end of the input field to search (the top-right "Search" is a navigation item, not a button).
-4. Tap the gear icon at top right for settings. On the "Detection" panel, the toggle saves on tap — no need to scroll to the bottom for a save button.
+4. Tap the gear icon at top right for settings. Channels, plugins, cloud-drive types and the detection toggle all save on selection — no need to scroll to the bottom for a save button.
 
 > **Telegram channels need a proxy**: without one, TG results are skipped automatically. Configure a system-level VPN/TUN, or set a local HTTP proxy in the app settings.
 

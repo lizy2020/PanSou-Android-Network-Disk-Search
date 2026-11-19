@@ -34,8 +34,8 @@ echo "==> 3/8 链接资源 / 清单 / assets"
   -A "$APP/assets" \
   --min-sdk-version 21 \
   --target-sdk-version 35 \
-  --version-code 7 \
-  --version-name "1.7" \
+  --version-code 10 \
+  --version-name "2.0" \
   "$OUT/res.zip"
 
 echo "==> 4/8 编译 Java"

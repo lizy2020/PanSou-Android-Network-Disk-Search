@@ -51,6 +51,9 @@ public class MainActivity extends Activity {
     private Backend backend;
     private String origin;
 
+    /** 更新检查结果缓存：页面还没加载完时先存着，onPageFinished 再注入 */
+    private volatile UpdateChecker.Info updateInfo;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -144,8 +147,69 @@ public class MainActivity extends Activity {
             public void onPageFinished(WebView view, String url) {
                 hideOverlay();
                 logWebConfig();
+                // 页面就绪后再通知更新提示：此时前端注入脚本已挂好 window.PansouUpdate
+                applyUpdate();
             }
         });
+    }
+
+    /**
+     * 后台问 GitHub 有没有新版本。失败静默，绝不阻塞启动或弹窗。
+     * 放在 boot 成功之后跑，跟搜索服务的启动并行，互不干扰。
+     */
+    private void checkUpdate() {
+        Thread t = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    String local = localVersion();
+                    UpdateChecker.Info info = UpdateChecker.check(local);
+                    if (info == null) return;
+                    updateInfo = info;
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            applyUpdate();
+                        }
+                    });
+                } catch (Throwable ignored) {
+                }
+            }
+        }, "update-check");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private String localVersion() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Throwable e) {
+            return "0";
+        }
+    }
+
+    /** 把更新信息交给前端注入脚本，由它在搜索页底部画红字。调用方需在主线程。 */
+    private void applyUpdate() {
+        final UpdateChecker.Info info = updateInfo;
+        if (info == null || web == null) return;
+        String js = "try{if(window.PansouUpdate&&PansouUpdate.show){"
+                + "PansouUpdate.show(" + jsStr(info.tag) + "," + jsStr(info.url) + ");}}catch(e){}";
+        web.evaluateJavascript(js, null);
+        android.util.Log.i("PansouUpdate", "已通知前端: " + info.tag);
+    }
+
+    /** 把 Java 字符串安全地转成 JS 字符串字面量 */
+    private static String jsStr(String s) {
+        if (s == null) return "''";
+        StringBuilder b = new StringBuilder("'");
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '\\' || c == '\'') b.append('\\').append(c);
+            else if (c == '\n') b.append("\\n");
+            else if (c == '\r') b.append("\\r");
+            else b.append(c);
+        }
+        return b.append('\'').toString();
     }
 
     /**
@@ -369,6 +433,9 @@ public class MainActivity extends Activity {
                             return Prefs.cfgSnapshot(MainActivity.this);
                         }
                     });
+
+                    // 更新检查与页面加载并行，失败静默，不拖慢启动
+                    checkUpdate();
 
                     setStatus("正在加载界面…");
                     runOnUiThread(new Runnable() {
