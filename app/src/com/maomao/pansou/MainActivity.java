@@ -4,12 +4,17 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
+import android.graphics.Matrix;
 import android.graphics.Typeface;
+import android.media.ExifInterface;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
+import android.util.Base64;
 import android.util.TypedValue;
 import android.view.View;
 import android.view.ViewGroup;
@@ -30,8 +35,12 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.InputStream;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
 
@@ -53,6 +62,10 @@ public class MainActivity extends Activity {
 
     /** 更新检查结果缓存：页面还没加载完时先存着，onPageFinished 再注入 */
     private volatile UpdateChecker.Info updateInfo;
+
+    /** 相册选图：SAF 请求码 + 压缩线程池 */
+    private static final int REQ_PICK_WALLPAPER = 2048;
+    private final ExecutorService wpExecutor = Executors.newSingleThreadExecutor();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -99,6 +112,220 @@ public class MainActivity extends Activity {
             Prefs.putCfg(MainActivity.this, key, value);
             android.util.Log.i("PansouCfg", "原生已备份 " + key + " = " + Prefs.brief(value));
         }
+
+        /**
+         * 前端诊断日志落 logcat。WebView 的 console 消息在部分 ROM/版本上收不到，
+         * 走一层原生桥最稳：`adb logcat -s PansouWebJs` 就能看到注入脚本的运行情况。
+         */
+        @android.webkit.JavascriptInterface
+        public void log(String msg) {
+            android.util.Log.i("PansouWebJs", String.valueOf(msg));
+        }
+    }
+
+    /**
+     * 壁纸桥接。前端注入脚本 PansouWallpaper 通过这些方法读写壁纸配置、拉起相册。
+     * 图片压缩成 dataURL 后由原生回调 JS，避免大图走 localStorage / 内联 HTML。
+     */
+    private class WallpaperBridge {
+        @android.webkit.JavascriptInterface
+        public String getConfig() {
+            return Prefs.wallpaperConfig(MainActivity.this);
+        }
+
+        @android.webkit.JavascriptInterface
+        public void setBuiltin(String id, double alpha) {
+            Prefs.setBuiltinWallpaper(MainActivity.this, id, (float) alpha);
+            android.util.Log.i("PansouWallpaper", "内置壁纸 " + id + " alpha=" + alpha);
+        }
+
+        @android.webkit.JavascriptInterface
+        public void setCustom(String dataUrl, double alpha) {
+            boolean ok = Prefs.setCustomWallpaper(MainActivity.this, dataUrl, (float) alpha);
+            android.util.Log.i("PansouWallpaper", "自定义壁纸写入 " + (ok ? "成功" : "失败")
+                    + " " + (dataUrl == null ? 0 : dataUrl.length()) + " 字符");
+        }
+
+        /** 只改通透度：滑块每动一下都会调，不能重写图片文件 */
+        @android.webkit.JavascriptInterface
+        public void setAlpha(double alpha) {
+            Prefs.setWallpaperAlpha(MainActivity.this, (float) alpha);
+        }
+
+        /** 把记住的自定义图重新应用为当前壁纸（“用户自定义”卡片点选用） */
+        @android.webkit.JavascriptInterface
+        public void applyCustom(double alpha) {
+            Prefs.applyCustomWallpaper(MainActivity.this, (float) alpha);
+            android.util.Log.i("PansouWallpaper", "自定义壁纸已应用 alpha=" + alpha);
+        }
+
+        /** 有没有记住过自定义图，给面板画缩略图用 */
+        @android.webkit.JavascriptInterface
+        public boolean hasCustom() {
+            return Prefs.hasCustomImage(MainActivity.this);
+        }
+
+        /** 拉起系统相册（SAF，无需存储权限） */
+        @android.webkit.JavascriptInterface
+        public void pickImage() {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    intent.setType("image/*");
+                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+                    // 少数 ROM 没装 DocumentsUI，OPEN_DOCUMENT 会直接抛；退回通用选图
+                    if (intent.resolveActivity(getPackageManager()) == null) {
+                        android.util.Log.i("PansouWallpaper", "没有 OPEN_DOCUMENT，改用 GET_CONTENT");
+                        intent = new Intent(Intent.ACTION_GET_CONTENT);
+                        intent.addCategory(Intent.CATEGORY_OPENABLE);
+                        intent.setType("image/*");
+                        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    }
+                    try {
+                        startActivityForResult(intent, REQ_PICK_WALLPAPER);
+                    } catch (Throwable e) {
+                        android.util.Log.e("PansouWallpaper", "拉起相册失败: " + e);
+                        toast("无法打开相册");
+                    }
+                }
+            });
+        }
+    }
+
+    /** 相册返回：后台读图 → 按长边缩放 + JPEG 压缩 → dataURL → 落文件 → 回调前端 */
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_PICK_WALLPAPER) return;
+        if (resultCode != RESULT_OK || data == null) {
+            android.util.Log.i("PansouWallpaper", "选图取消 resultCode=" + resultCode);
+            return;
+        }
+        // 有的相册/文件管理器不发 data.getData()，而是塞进 clipData
+        Uri picked = data.getData();
+        if (picked == null && data.getClipData() != null
+                && data.getClipData().getItemCount() > 0) {
+            picked = data.getClipData().getItemAt(0).getUri();
+        }
+        if (picked == null) {
+            android.util.Log.w("PansouWallpaper", "选图返回但没有 uri");
+            toast("没拿到图片，请换一张再试");
+            return;
+        }
+        final Uri uri = picked;
+        android.util.Log.i("PansouWallpaper", "选了图片 " + uri);
+        wpExecutor.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    // 持久化读取权限，下次启动还能用（虽然我们只存图片字节，不长期持有 uri）
+                    try {
+                        getContentResolver().takePersistableUriPermission(
+                                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    } catch (Throwable ignored) {
+                    }
+
+                    // 先探尺寸，按比例采样，避免大图 OOM
+                    BitmapFactory.Options probe = new BitmapFactory.Options();
+                    probe.inJustDecodeBounds = true;
+                    InputStream in = getContentResolver().openInputStream(uri);
+                    if (in == null) throw new Exception("无法读取图片");
+                    BitmapFactory.decodeStream(in, null, probe);
+                    in.close();
+
+                    int maxSide = 1600;
+                    int side = Math.max(probe.outWidth, probe.outHeight);
+                    int sample = 1;
+                    while (side / sample / 2 >= maxSide) sample *= 2;
+                    if (sample < 1) sample = 1;
+
+                    BitmapFactory.Options opt = new BitmapFactory.Options();
+                    opt.inSampleSize = sample;
+                    opt.inPreferredConfig = Bitmap.Config.RGB_565;
+                    in = getContentResolver().openInputStream(uri);
+                    Bitmap bm = BitmapFactory.decodeStream(in, null, opt);
+                    in.close();
+                    if (bm == null) throw new Exception("图片解码失败");
+
+                    // 按 EXIF 旋正
+                    bm = rotateByExif(bm, uri);
+
+                    ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                    bm.compress(Bitmap.CompressFormat.JPEG, 82, bos);
+                    byte[] bytes = bos.toByteArray();
+                    final String dataUrl = "data:image/jpeg;base64,"
+                            + Base64.encodeToString(bytes, Base64.NO_WRAP);
+                    bm.recycle();
+
+                    final float alpha = Prefs.wallpaperAlpha(MainActivity.this);
+                    final int kb = bytes.length / 1024;
+                    // 先落文件（成功才改配置），再通知前端套用
+                    final boolean saved = Prefs.setCustomWallpaper(MainActivity.this, dataUrl, alpha);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (!saved) {
+                                toast("壁纸保存失败，重启可能丢失，请重试");
+                                return;
+                            }
+                            try {
+                                if (web != null) {
+                                    String js = "try{if(window.PansouWallpaper&&PansouWallpaper.onImagePicked){"
+                                            + "PansouWallpaper.onImagePicked(" + jsStr(dataUrl) + "," + alpha + ");}}catch(e){}";
+                                    web.evaluateJavascript(js, null);
+                                }
+                            } catch (Throwable e) {
+                                android.util.Log.w("PansouWallpaper", "回调前端失败: " + e);
+                            }
+                            toast("壁纸已应用（" + kb + " KB）");
+                        }
+                    });
+                } catch (final Throwable e) {
+                    android.util.Log.e("PansouWallpaper", "处理图片失败: " + e);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            toast("壁纸设置失败：" + e.getMessage());
+                        }
+                    });
+                }
+            }
+        });
+    }
+
+    /** 依据 EXIF Orientation 旋正位图 */
+    private Bitmap rotateByExif(Bitmap bm, Uri uri) {
+        try {
+            InputStream in = getContentResolver().openInputStream(uri);
+            if (in == null) return bm;
+            ExifInterface exif = new ExifInterface(in);
+            in.close();
+            int rot = exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL);
+            int deg;
+            switch (rot) {
+                case ExifInterface.ORIENTATION_ROTATE_90: deg = 90; break;
+                case ExifInterface.ORIENTATION_ROTATE_180: deg = 180; break;
+                case ExifInterface.ORIENTATION_ROTATE_270: deg = 270; break;
+                default: return bm;
+            }
+            Matrix m = new Matrix();
+            m.postRotate(deg);
+            Bitmap out = Bitmap.createBitmap(bm, 0, 0, bm.getWidth(), bm.getHeight(), m, true);
+            bm.recycle();
+            return out;
+        } catch (Throwable e) {
+            return bm;
+        }
+    }
+
+    private void toast(String msg) {
+        try {
+            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
+        } catch (Throwable ignored) {
+        }
     }
 
     private void configureWeb() {
@@ -119,6 +346,7 @@ public class MainActivity extends Activity {
         }
 
         web.addJavascriptInterface(new CfgBridge(), "PansouNative");
+        web.addJavascriptInterface(new WallpaperBridge(), "PansouWallpaperNative");
 
         web.setWebChromeClient(new WebChromeClient() {
             @Override

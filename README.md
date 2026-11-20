@@ -20,12 +20,18 @@
 
 ## 当前版本
 
-**v2.0**（versionCode 10）· 包名 `com.maomao.pansou` · 仅 arm64 · minSdk 21 / targetSdk 35
+**v4.3**（versionCode 33）· 包名 `com.maomao.pansou` · 仅 arm64 · minSdk 21 / targetSdk 35
 
-预编译 APK 位于 [`releases/pansou-android-v2.0.apk`](releases/pansou-android-v2.0.apk)，也可在 GitHub Releases 页下载。
+预编译 APK 位于 [`releases/pansou-android-v4.3.apk`](releases/pansou-android-v4.3.apk)，也可在 GitHub Releases 页下载。
 
 ## 更新日志
 
+- **v4.3**（versionCode 33）
+  - **界面壁纸**：内置渐变 + 相册自定义图，透明度可调；按壁纸明暗自动把文字切成深墨/白墨，顶栏图标与描边同步跟随；弹键盘、滚动、转屏时壁纸不再缩放跳动。
+  - **结果顺序锁定**：修掉「边滑边加载、或下滑触发链接检测时列表重排」，已看到的条目不再被挪走（改动前是检测状态优先排序，检测一回来就洗牌）。
+  - **配置页田字格**：四个标签改为 2×2（网盘类型 / 检测 在上，TG 频道 / 搜索插件 在下），默认选中「网盘类型」。
+  - **前端不被缓存**：静态资源改为 `no-store` 并对前端包改名，避免 WebView 复用旧 bundle 导致「装了新版本但行为没变」。
+  - 壁纸图片改存文件（`wp_custom.jpg`），1–2MB 的图不再撑爆 SharedPreferences；旧数据自动迁移。
 - **v2.0**（versionCode 10）
   - 链接检测默认开启，仍只检测当前可见的结果；老用户已关闭的设置不会被覆盖。
   - 更新提示在用户开始搜索后自动隐藏，不遮挡搜索结果。

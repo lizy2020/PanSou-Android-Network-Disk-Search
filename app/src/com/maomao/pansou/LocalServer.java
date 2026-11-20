@@ -299,8 +299,19 @@ final class LocalServer {
             return;
         }
 
-        boolean noStore = path.equals("/index.html");
-        if (noStore && data != null) {
+        // 前端代码一律不许缓存：
+        // 打包前端的文件名是 Vite 的内容哈希，我们改过 bundle（去掉检测后的优先级重排）却
+        // 没有改名，WebView 就会拿「同一个 URL + 一天有效期」的老缓存继续跑 —— 界面上的表现
+        // 是「新版本装了但行为没变」，曾经的「一检测就重排」就是这么来的。
+        String lower = path.toLowerCase();
+        boolean noStore = path.equals("/index.html")
+                || lower.endsWith(".js")
+                || lower.endsWith(".css")
+                || lower.endsWith(".html")
+                || lower.endsWith(".json");
+        // 只有首页要注入原生配置脚本；.js/.css 只是不许缓存，绝不能当 HTML 处理
+        boolean isHtml = path.equals("/index.html") || lower.endsWith(".html");
+        if (isHtml && data != null) {
             data = injectCfg(data);
             ctype = "text/html; charset=utf-8";
         }
